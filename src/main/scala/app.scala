@@ -5,24 +5,18 @@ import org.apache.spark.streaming._
 object Main {
   def main(args: Array[String]) {
     val conf = new SparkConf().setMaster("local[2]").setAppName("NetworkWordCount")
-    val ssc = new StreamingContext(conf, Seconds(1))
+    val ssc = new StreamingContext(conf, Seconds(200))
 
     val lines = ssc.socketTextStream("10.91.66.168", 8989)
-    print(lines)
-//    lines.saveAsTextFiles("")
-
-
-
-//    lines.map(status => status.getText).map(tweet => (tweet, sentiment(tweet)))
-//      .foreachRDD(rdd => rdd.collect().foreach(tuple => println(" Sentiment => " + tuple._2 + " :-: TWEET => " + tuple._1)))
-
+//    val lines = ssc.socketTextStream("localhost", 9999)
     val words = lines.flatMap(_.split(" "))
+    val count = lines.count()
+//    val wordCounts = words.map(x => (x, 1)).reduceByKey(_ + _)
+    lines.print()
+    count.print()
+    words.print()
 
-
-    val pairs = words.map(word => (word, 1))
-    val wordCounts = pairs.reduceByKey(_ + _)
-
-    wordCounts.print()
+    print("GOVNO_ZALUPAAAAAAAAAAAAAAA")
 
     ssc.start() // Start the computation
     ssc.awaitTermination()
