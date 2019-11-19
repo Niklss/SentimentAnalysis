@@ -2,7 +2,7 @@ version := "0.1"
 name := "bd-assignment"
 description := "Team dublin bigdata 2nd assignment."
 
-scalaVersion := "2.12.10"
+scalaVersion := "2.13.1"
 
 scalacOptions ++= Seq(
   "-unchecked",
