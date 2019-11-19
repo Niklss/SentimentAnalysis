@@ -39,6 +39,37 @@ object RSSDemo {
 
   }
 
+  val tokenizer = new RegexTokenizer()
+    .setInputCol("Preprocessed")
+    .setOutputCol("wordsUnclean")
+    .setPattern("\\s+")
+
+  val stopWordRemover = new StopWordsRemover()
+    .setInputCol("wordsUnclean")
+    .setOutputCol("words")
+
+  val wordNgram = new NGram()
+    .setN(2)
+    .setInputCol("words")
+    .setOutputCol("wordNgrams")
+
+  val wordFeatures = new CountVectorizer()
+    .setInputCol("words")
+    .setOutputCol("wordFeatures")
+
+
+  val ngFeatures = new CountVectorizer()
+    .setInputCol("wordNgrams")
+    .setOutputCol("ngFeatures")
+  //      .setVocabSize(2)
+  //      .setMinDF(2)
+  //
+
+  val combineFeature = new VectorAssembler()
+    .setInputCols(Array("wordFeatures", "ngFeatures"))
+    .setOutputCol("features")
+
+
   def getLogisticRegression(): LogisticRegression ={
     new LogisticRegression()
       .setMaxIter(10)
