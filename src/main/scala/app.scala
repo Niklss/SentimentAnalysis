@@ -1,94 +1,53 @@
+import org.apache.spark._
+import org.apache.spark.sql._
+import org.apache.spark.sql.functions
+import org.apache.spark.sql.functions.{lit}
+import org.apache.spark.streaming._
 import org.apache.spark.ml.Pipeline
-import org.apache.spark.sql.{SaveMode, SparkSession, functions}
-import org.apache.spark.storage.StorageLevel
-import org.apache.spark.streaming.{Seconds, StreamingContext}
-import org.apache.spark.{SparkConf, SparkContext}
 import org.apache.spark.ml.classification.LogisticRegression
 import org.apache.spark.ml.feature.{HashingTF, Normalizer, Tokenizer}
 import org.apache.spark.ml.classification.LinearSVC
 import org.apache.spark.ml.evaluation.{MulticlassClassificationEvaluator, RegressionEvaluator}
 
+case class TrainingTweet(ItemId: Long, Sentiment: Integer, SentimentText: String) // For each tweeter in reading train data
 
-case class TrainingTweet(tweetId: Long, label: Integer, tweetContent: String)
-
-object RSSDemo {
-
-  val durationSeconds = 60 //update time
-
-  var conf :SparkConf = _
-  var sc  :SparkContext = _
-  var ssc :StreamingContext = _
-  var urlCSV :String = _ //our RSS link
-
-  def init(): Unit ={
-    conf = new SparkConf().setAppName("RSS Spark Application").setIfMissing("spark.master", "local[*]")
-    sc = new SparkContext(conf)
-    ssc = new StreamingContext(sc, Seconds(durationSeconds))
-    sc.setLogLevel("ERROR")
-  }
-  def setRssUrl (url :String): Unit ={
-    urlCSV = url
-  }
-  def getUrls(): Array[String] ={
-    urlCSV.split(",")
-  }
-  def RSSToRDD(rssUrl :Array[String]): RSSInputDStream ={
-    new RSSInputDStream(rssUrl, Map[String, String](
-      "User-Agent" -> "Mozilla/5.0 (Windows NT 6.1) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/41.0.2228.0 Safari/537.36"
-    ), ssc, StorageLevel.MEMORY_ONLY, connectTimeout = 60000, pollingPeriodInSeconds = durationSeconds)
-
-  }
-
-  def getLogisticRegression(): LogisticRegression ={
-    new LogisticRegression()
-      .setMaxIter(10)
-      .setRegParam(0.01)
-  }
-
-  def getSVM(): LinearSVC ={
-    new LinearSVC()
-      .setMaxIter(10)
-  }
-
-  def normalizeData(): Unit ={
-
-  }
-
+object Main {
   def main(args: Array[String]) {
+    val conf = new SparkConf().setMaster("local[2]").setAppName("SentimentClassifier") //set Spark configuration
+    val ssc = new StreamingContext(conf, Seconds(20)) //Set the StreamingContext
+    val spark = SparkSession                           //Set the Spark Session
+      .builder
+      .appName("SentimentClassifier")
+      .config("spark.master", "local")
+      .getOrCreate()
+    spark.sparkContext.setLogLevel("ERROR")
+    import spark.implicits._
 
-    init()
-    urlCSV = "https://queryfeed.net/twitter?q=putin&title-type=user-name-both&order-by=recent&geocode="
-    if (args.length > 0) setRssUrl(args(0))
+    //Training part
 
-    val urls = getUrls() //get url of each twit
-
-    val tweetsFromRSS = RSSToRDD(urls) // RSS TO RDD
-
-    val spark = SparkSession.builder().appName(sc.appName).getOrCreate() //create spark
-    import spark.sqlContext.implicits._
-    val sqlContext = new org.apache.spark.sql.SQLContext(sc)
-
-
-    var trainTweets = sqlContext.read.format("com.databricks.spark.csv") //train tweets for model to learn
+    var trainTweets = spark.read.format("com.databricks.spark.csv") //read train tweets for model to learn
       .option("header", "true")
       .option("inferSchema", "true")
-      .load("train.csv").as[TrainingTweet] //adding train.csv
-      .withColumn("tweetContent", functions.lower(functions.col("tweetContent")))
+      .load("train.csv").as[TrainingTweet] //adding train.csv and write it to special class TrainingTweet
+      .withColumn("SentimentText", functions.lower(functions.col("SentimentText"))) //convert to lower case
+      .withColumnRenamed("Sentiment","label")
 
 
-    val tokenizer = new Tokenizer()
-      .setInputCol("tweetContent")
+    val tokenizer = new Tokenizer()  // Tokenizer to tokenize each work in the tweet
+      .setInputCol("SentimentText")
       .setOutputCol("words")
 
-    val hashingTF = new HashingTF()
+    val hashingTF = new HashingTF()  // Specify feature extractor
       .setNumFeatures(10000)
       .setInputCol(tokenizer.getOutputCol)
       .setOutputCol("features")
 
-    val regression1 = getSVM() //
-    val regression2 = getLogisticRegression()
+    val regression1 = new LinearSVC().setMaxIter(10) // specify regression model with some parameters
+    val regression2 = new LogisticRegression()
+                    .setMaxIter(10)
+                    .setRegParam(0.01)
 
-    val pipeline1 = new Pipeline()
+    val pipeline1 = new Pipeline()   //Create ML pipeline for every classification algorithm
       .setStages(
         Array(
           tokenizer,   // 1) tokenize
@@ -102,27 +61,26 @@ object RSSDemo {
           hashingTF,   // 2) hashing
           regression2)) // 3) making regression
 
+    trainTweets = trainTweets          // Pre-processing of training data
+      .withColumn("SentimentText", functions.regexp_replace(
+        functions.col("SentimentText"),
+        """[\p{Punct}&&[^.]]""", ""))   //delete punctuation from the tweet text
 
-    trainTweets = trainTweets
-      .withColumn("tweetContent", functions.regexp_replace(
-        functions.col("tweetContent"),
-        """[\p{Punct}&&[^.]]""", ""))
-
+    //Split the data to training and validation data sets 70% - 30%
     val Array(trainingData, testData) = trainTweets.randomSplit(Array(0.7, 0.3))
 
-    //fitting model with preprocessing data
+    //fitting model with pre-processing data
     val model1 = pipeline1.fit(trainingData)
     val predictions1 = model1.transform(testData)
-
     val model2 = pipeline2.fit(trainingData)
     val predictions2 = model2.transform(testData)
 
-
-    val evaluator = new MulticlassClassificationEvaluator()
+    val evaluator = new MulticlassClassificationEvaluator()  //Compare results on training with validate data
       .setLabelCol("label")
       .setPredictionCol("prediction")
       .setMetricName("accuracy")
 
+    // evaluate accuracy of the models
     val accuracy1 = evaluator.evaluate(predictions1)
     val accuracy2 = evaluator.evaluate(predictions2)
     var finalModel = model2
@@ -131,61 +89,51 @@ object RSSDemo {
     println("Test Error in SVM = " + (1.0 - accuracy1))
     println("Test Error in Logistic Regression = " + (1.0 - accuracy2))
 
-    tweetsFromRSS.foreachRDD(rdd => { //creating stream to get tweets
-      if (!rdd.isEmpty()) {
 
-        //from RDD to DS
-        var tweets = rdd.toDS()
-          .select("uri", "title")
-          .withColumn("title", functions.lower(functions.col("title")))
-          .withColumn("tweetId", functions.monotonically_increasing_id())
-          .withColumn("tweetContent", functions.col("title"))
-
-        tweets = tweets.withColumn("tweetContent",
-          functions.regexp_replace(functions.col("tweetContent"),
-            """[\p{Punct}&&[^.]]""", ""))
-
-        //predict for DS
-        val predictions = finalModel.transform(tweets)
-          .select("title", "prediction", "probability")
-
-        //printing result
-        print(predictions.show() + " hello")
-
-
-        //save results to file
-        predictions.toDF().write.mode(SaveMode.Append).save("output")
-      }
-    })
-
-    // run forever
-    ssc.start()
-    ssc.awaitTermination()
-  }
-}
-
-
-object Main {
-  def main(args: Array[String]) {
-    val conf = new SparkConf().setMaster("local[2]").setAppName("NetworkWordCount")
-    val ssc = new StreamingContext(conf, Seconds(200))
+    //Stream listening
 
     val lines = ssc.socketTextStream("10.91.66.168", 8989)
-    //    val lines = ssc.socketTextStream("localhost", 9999)
-    val words = lines.flatMap(_.split(" "))
-    val count = lines.count()
-    //    val wordCounts = words.map(x => (x, 1)).reduceByKey(_ + _)
-    lines.print()
-    count.print()
-    words.print()
+    lines.foreachRDD(    //DStream -> RDD
+      (rdd, time) =>       // Take RDD and Time
+        if (!rdd.isEmpty()) {   // Check if it is empty
+          val df = rdd.toDF     //RDD -> Data Frame
 
-    print("GOVNO_ZALUPAAAAAAAAAAAAAAA")
+
+          // Data pre-processing
+
+          var tweets = df
+            .withColumn("ItemId", functions.monotonically_increasing_id())
+            .withColumn("SentimentText", functions.col("value"))
+
+
+          tweets = tweets.withColumn("SentimentText",
+            functions.regexp_replace(functions.col("SentimentText"),
+              """[\p{Punct}&&[^.]]""", ""))
+
+
+          //Classification
+
+          val predictions = finalModel.transform(tweets)
+            .select("SentimentText", "prediction", "probability")
+
+
+          //Results post-processing
+
+          val df_out = df.withColumn("time", lit(time.toString())). //Time when message arrived
+            withColumn("class", lit(predictions.limit(1)
+                                          .select("prediction")
+                                          .collect.toList.head.toString)) //Write the class of this message
+
+          //Writing to output (CSV)
+
+          df_out.repartition(1)
+              .write.format("com.databricks.spark.csv")
+              .mode("append")
+              .save("output.csv")
+        }
+    )
 
     ssc.start() // Start the computation
     ssc.awaitTermination()
-  }
-
-  def sentiment(value: Any): Unit = {
-
   }
 }
