@@ -9,7 +9,7 @@ import org.apache.spark.ml.feature.{HashingTF, Normalizer, Tokenizer}
 import org.apache.spark.ml.classification.LinearSVC
 import org.apache.spark.ml.evaluation.{MulticlassClassificationEvaluator, RegressionEvaluator}
 
-case class TrainingTweet(ItemId: Long, Sentiment: Integer, SentimentText: String)
+case class TrainingTweet(ItemId: Long, Sentiment: Integer, SentimentText: String) // For each tweeter in reading train data
 
 object Main {
   def main(args: Array[String]) {
@@ -25,29 +25,29 @@ object Main {
 
     //Training part
 
-    var trainTweets = spark.read.format("com.databricks.spark.csv") //train tweets for model to learn
+    var trainTweets = spark.read.format("com.databricks.spark.csv") //read train tweets for model to learn
       .option("header", "true")
       .option("inferSchema", "true")
-      .load("train.csv").as[TrainingTweet] //adding train.csv
-      .withColumn("SentimentText", functions.lower(functions.col("SentimentText")))
+      .load("train.csv").as[TrainingTweet] //adding train.csv and write it to special class TrainingTweet
+      .withColumn("SentimentText", functions.lower(functions.col("SentimentText"))) //convert to lower case
       .withColumnRenamed("Sentiment","label")
 
 
-    val tokenizer = new Tokenizer()
+    val tokenizer = new Tokenizer()  // Tokenizer to tokenize each work in the tweet
       .setInputCol("SentimentText")
       .setOutputCol("words")
 
-    val hashingTF = new HashingTF()
+    val hashingTF = new HashingTF()  // Specify feature extractor
       .setNumFeatures(10000)
       .setInputCol(tokenizer.getOutputCol)
       .setOutputCol("features")
 
-    val regression1 = new LinearSVC().setMaxIter(10) //
+    val regression1 = new LinearSVC().setMaxIter(10) // specify regression model with some parameters
     val regression2 = new LogisticRegression()
                     .setMaxIter(10)
                     .setRegParam(0.01)
 
-    val pipeline1 = new Pipeline()
+    val pipeline1 = new Pipeline()   //Create ML pipeline for every classification algorithm
       .setStages(
         Array(
           tokenizer,   // 1) tokenize
@@ -61,25 +61,26 @@ object Main {
           hashingTF,   // 2) hashing
           regression2)) // 3) making regression
 
-    trainTweets = trainTweets
+    trainTweets = trainTweets          // Pre-processing of training data
       .withColumn("SentimentText", functions.regexp_replace(
         functions.col("SentimentText"),
-        """[\p{Punct}&&[^.]]""", ""))
+        """[\p{Punct}&&[^.]]""", ""))   //delete punctuation from the tweet text
 
+    //Split the data to training and validation data sets 70% - 30%
     val Array(trainingData, testData) = trainTweets.randomSplit(Array(0.7, 0.3))
 
-    //fitting model with preprocessing data
+    //fitting model with pre-processing data
     val model1 = pipeline1.fit(trainingData)
     val predictions1 = model1.transform(testData)
-
     val model2 = pipeline2.fit(trainingData)
     val predictions2 = model2.transform(testData)
 
-    val evaluator = new MulticlassClassificationEvaluator()
+    val evaluator = new MulticlassClassificationEvaluator()  //Compare results on training with validate data
       .setLabelCol("label")
       .setPredictionCol("prediction")
       .setMetricName("accuracy")
 
+    // evaluate accuracy of the models
     val accuracy1 = evaluator.evaluate(predictions1)
     val accuracy2 = evaluator.evaluate(predictions2)
     var finalModel = model2
@@ -92,37 +93,38 @@ object Main {
     //Stream listening
 
     val lines = ssc.socketTextStream("10.91.66.168", 8989)
-//    val lines = ssc.socketTextStream("localhost", 9999)
-    val words = lines.flatMap(_.split(" "))
-    val count = lines.count()
-    lines.foreachRDD(
-      (rdd, time) =>
-        if (!rdd.isEmpty()) {
-          val df = rdd.toDF
-          // do something
-          df.printSchema()
+    lines.foreachRDD(    //DStream -> RDD
+      (rdd, time) =>       // Take RDD and Time
+        if (!rdd.isEmpty()) {   // Check if it is empty
+          val df = rdd.toDF     //RDD -> Data Frame
+
+
+          // Data pre-processing
 
           var tweets = df
             .withColumn("ItemId", functions.monotonically_increasing_id())
             .withColumn("SentimentText", functions.col("value"))
 
-          tweets.collect.foreach(println)
-          //Classification
 
           tweets = tweets.withColumn("SentimentText",
             functions.regexp_replace(functions.col("SentimentText"),
               """[\p{Punct}&&[^.]]""", ""))
 
+
+          //Classification
+
           val predictions = finalModel.transform(tweets)
             .select("SentimentText", "prediction", "probability")
 
-          //printing result
-          print(predictions.show() + " hello")
+
+          //Results post-processing
 
           val df_out = df.withColumn("time", lit(time.toString())). //Time when message arrived
             withColumn("class", lit(predictions.limit(1)
                                           .select("prediction")
                                           .collect.toList.head.toString)) //Write the class of this message
+
+          //Writing to output (CSV)
 
           df_out.repartition(1)
               .write.format("com.databricks.spark.csv")
@@ -134,9 +136,5 @@ object Main {
 
     ssc.start() // Start the computation
     ssc.awaitTermination()
-  }
-
-  def sentiment(value: Any): Unit ={
-
   }
 }
