@@ -2,7 +2,6 @@ import org.apache.spark._
 import org.apache.spark.sql._
 import org.apache.spark.sql.functions
 import org.apache.spark.sql.functions.{lit}
-import org.apache.spark.sql.SQLContext
 import org.apache.spark.streaming._
 import org.apache.spark.ml.Pipeline
 import org.apache.spark.ml.classification.LogisticRegression
@@ -14,9 +13,9 @@ case class TrainingTweet(ItemId: Long, Sentiment: Integer, SentimentText: String
 
 object Main {
   def main(args: Array[String]) {
-    val conf = new SparkConf().setMaster("local[2]").setAppName("Twitter-Sentiment")
-    val ssc = new StreamingContext(conf, Seconds(20))
-    val spark = SparkSession
+    val conf = new SparkConf().setMaster("local[2]").setAppName("SentimentClassifier") //set Spark configuration
+    val ssc = new StreamingContext(conf, Seconds(20)) //Set the StreamingContext
+    val spark = SparkSession                           //Set the Spark Session
       .builder
       .appName("SentimentClassifier")
       .config("spark.master", "local")
@@ -24,8 +23,7 @@ object Main {
     spark.sparkContext.setLogLevel("ERROR")
     import spark.implicits._
 
-    //Training
-
+    //Training part
 
     var trainTweets = spark.read.format("com.databricks.spark.csv") //train tweets for model to learn
       .option("header", "true")
