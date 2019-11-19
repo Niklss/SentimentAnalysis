@@ -133,7 +133,6 @@ object Main {
         }
     )
 
-
     ssc.start() // Start the computation
     ssc.awaitTermination()
   }
