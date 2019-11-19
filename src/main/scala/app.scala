@@ -122,7 +122,9 @@ object Main {
           print(predictions.show() + " hello")
 
           val df_out = df.withColumn("time", lit(time.toString())). //Time when message arrived
-            withColumn("class", lit(predictions.limit(1).select("prediction").as[String].collect().toString)) //Write the class of this message
+            withColumn("class", lit(predictions.limit(1)
+                                          .select("prediction")
+                                          .collect.toList.head.toString)) //Write the class of this message
 
           df_out.repartition(1)
               .write.format("com.databricks.spark.csv")
